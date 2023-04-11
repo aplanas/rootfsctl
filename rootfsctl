@@ -1,0 +1,161 @@
+#!/usr/bin/bash
+
+IMAGE="openSUSE-Tumbleweed-ARM-JeOS.aarch64-rootfs.aarch64.tar.xz"
+MIRROR="http://download.opensuse.org/ports/aarch64/tumbleweed/appliances/${IMAGE}"
+ROOTFS="rootfs"
+
+fetch_image() {
+    if [ -e "${IMAGE}" ]; then
+	echo "MicroOS image is already present, use -f to force the download"
+	exit 1
+    fi
+
+    mkdir -p "${ROOTFS}"
+    wget "${MIRROR}"
+}
+
+remove_image() {
+    [ -e "${IMAGE}" ] && rm "${IMAGE}"
+}
+
+create_rootfs() {
+    if [ -e "${ROOTFS}" ]; then
+	echo "rootfs for MicroOS is already present, use -f to force the creation"
+	exit 1
+    fi
+
+    mkdir "${ROOTFS}"
+    echo "extracting data from image into ${ROOTFS} ..."
+    tar -xJvf "${IMAGE}" -C "${ROOTFS}"
+}
+
+destroy_rootfs() {
+    [ -e "${ROOTFS}" ] && chmod -R a+rwx "${ROOTFS}" && rm -fr "${ROOTFS}"
+}
+
+binfmt_rootfs() {
+    # From qemu-linux-user.rpm:/usr/sbin/qemu-binfmt-conf.sh
+    cpu="arm"
+    magic='\x7fELF\x01\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\x28\x00'
+    mask='\xff\xff\xff\xff\xff\xff\xff\x00\xff\xff\xff\xff\xff\xff\xff\xff\xfe\xff\xff\xff'
+    if [ ! -f /proc/sys/fs/binfmt_misc/qemu-${cpu} ]; then
+	echo ":qemu-${cpu}:M::${magic}:${mask}:/usr/bin/qemu-${cpu}:F" > /proc/sys/fs/binfmt_misc/register
+    fi
+    chmod u+w "${ROOTFS}"/usr/bin
+    cp /usr/bin/qemu-${cpu} "${ROOTFS}"/usr/bin/
+    chmod u-w "${ROOTFS}"/usr/bin
+
+    cpu="aarch64"
+    magic='\x7fELF\x02\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\xb7\x00'
+    mask='\xff\xff\xff\xff\xff\xff\xff\x00\xff\xff\xff\xff\xff\xff\xff\xff\xfe\xff\xff\xff'
+    if [ ! -f /proc/sys/fs/binfmt_misc/qemu-${cpu} ]; then
+	echo ":qemu-${cpu}:M::${magic}:${mask}:/usr/bin/qemu-${cpu}:F" > /proc/sys/fs/binfmt_misc/register
+    fi
+    chmod u+w "${ROOTFS}"/usr/bin
+    cp /usr/bin/qemu-${cpu} "${ROOTFS}"/usr/bin/
+    chmod u-w "${ROOTFS}"/usr/bin
+}
+
+resolv_rootfs() {
+    :
+    # cp /etc/resolv.conf "${ROOTFS}"/run/systemd/resolve/stub-resolv.conf
+}
+
+mount_rootfs() {
+    [ -n "$1" ] && [ -d "$1" ] && sudo mount --bind "$1" "${ROOTFS}"/mnt
+    sudo mount --bind /proc "${ROOTFS}"/proc
+    sudo mount --bind /sys "${ROOTFS}"/sys
+    sudo mount --bind /dev "${ROOTFS}"/dev
+    sudo mount --bind /dev/pts "${ROOTFS}"/dev/pts
+}
+
+umount_rootfs() {
+    sudo umount "${ROOTFS}"/dev/pts
+    sudo umount "${ROOTFS}"/dev
+    sudo umount "${ROOTFS}"/sys
+    sudo umount "${ROOTFS}"/proc
+    sudo umount "${ROOTFS}"/mnt &> /dev/null
+}
+
+shell_rootfs() {
+    binfmt_rootfs
+    resolv_rootfs
+    mount_rootfs "$1"
+    sudo chroot "${ROOTFS}"
+    umount_rootfs
+}
+
+print_help() {
+    echo "Usage:"
+    echo "  rootfsctl -h                   Display this help message"
+    echo "  rootfsctl fetch [-f]           Download aarch64 rootfs image"
+    echo "  rootfsctl create [-f]          Create a new rootfs"
+    echo "  rootfsctl destroy              Remove the current rootfs"
+    echo "  rootfsctl shell [dir]          Enter into the rootfs and bind dir"
+    echo "  rootfsctl umount               Umount the rootfs bind directories"
+    echo
+    echo "Example:"
+    echo "  rootfsctl fetch && rootfsctl create && rootfsctl shell"
+    echo "  rootfsctl umount && rootfsctl destroy"    
+}
+
+while getopts ":h" opt; do
+    case ${opt} in
+	h)
+	    print_help
+	    exit 0
+	    ;;
+	*)
+	    echo "Invalid Option: -${OPTARG}" 1>&2
+	    exit 1
+	    ;;
+    esac
+done
+shift $((OPTIND - 1))
+
+
+cmd=$1; shift
+case "$cmd" in
+    fetch)
+	while getopts ":f" opt; do
+	    case ${opt} in
+		f)
+		    remove_image
+		    ;;
+		*)
+		    echo "invalid option: -${OPTARG}" 1>&2
+		    exit 1
+		    ;;
+	    esac
+	done
+	fetch_image
+	;;
+    create)
+	while getopts ":f" opt; do
+	    case ${opt} in
+		f)
+		    destroy_rootfs
+		    ;;
+		*)
+		    echo "invalid option: -${OPTARG}" 1>&2
+		    exit 1
+		    ;;
+	    esac
+	done
+	create_rootfs
+	;;
+    destroy)
+	destroy_rootfs
+	;;
+    shell)
+	shell_rootfs "$1"
+	;;
+    umount)
+	umount_rootfs
+	;;
+    *)
+	echo "invalid command: ${cmd}"
+	print_help
+	exit 1
+	;;
+esac
