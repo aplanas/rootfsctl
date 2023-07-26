@@ -57,8 +57,7 @@ binfmt_rootfs() {
 }
 
 resolv_rootfs() {
-    :
-    # cp /etc/resolv.conf "${ROOTFS}"/run/systemd/resolve/stub-resolv.conf
+    cp /etc/resolv.conf "${ROOTFS}"/etc/
 }
 
 mount_rootfs() {
